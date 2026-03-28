@@ -3,9 +3,7 @@ import cors from "cors";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -102,8 +100,6 @@ app.post("/api/info", async (req, res) => {
 });
 
 app.post("/api/download", async (req, res) => {
-  let finalPath = null;
-
   try {
     const { url } = req.body;
 
@@ -114,44 +110,86 @@ app.post("/api/download", async (req, res) => {
       });
     }
 
-    const tempDir = os.tmpdir();
-    const uniqueId = crypto.randomUUID();
-    const outputTemplate = path.join(tempDir, `${uniqueId}.%(ext)s`);
-    const cookiesFile = ensureIgCookies();
+    if (
+      url.includes("tiktok.com") ||
+      url.includes("vm.tiktok.com") ||
+      url.includes("vt.tiktok.com")
+    ) {
+      const { stdout } = await runYtDlp([
+        "-f",
+        "best",
+        "-g",
+        url
+      ]);
 
-    const args = [
-      ...(cookiesFile ? ["--cookies", cookiesFile] : []),
-      "-f",
-      "bestvideo+bestaudio/best",
-      "--merge-output-format",
-      "mp4",
-      "-o",
-      outputTemplate,
-      url
-    ];
-
-    await runYtDlp(args);
-
-    const files = fs.readdirSync(tempDir).filter((name) => name.startsWith(uniqueId));
-
-    if (!files.length) {
-      throw new Error("File hasil download tidak ditemukan");
+      return res.json({
+        ok: true,
+        video: stdout.trim()
+      });
     }
 
-    const finalName = files[0];
-    finalPath = path.join(tempDir, finalName);
+    if (url.includes("instagram.com")) {
+      try {
+        const response = await fetch(`https://api.savetube.me/info?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
 
-    return res.download(finalPath, finalName, () => {
-      if (finalPath && fs.existsSync(finalPath)) {
-        fs.unlink(finalPath, () => {});
+        if (data?.data?.url) {
+          return res.json({
+            ok: true,
+            video: data.data.url
+          });
+        }
+      } catch (e) {
+        console.log("IG fallback 1 gagal");
       }
+
+      try {
+        const response = await fetch(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (data?.data?.play) {
+          return res.json({
+            ok: true,
+            video: data.data.play
+          });
+        }
+      } catch (e) {
+        console.log("IG fallback 2 gagal");
+      }
+
+      try {
+        const cookiesFile = ensureIgCookies();
+
+        const args = [
+          ...(cookiesFile ? ["--cookies", cookiesFile] : []),
+          "-f",
+          "best",
+          "-g",
+          url
+        ];
+
+        const { stdout } = await runYtDlp(args);
+
+        return res.json({
+          ok: true,
+          video: stdout.trim()
+        });
+      } catch (e) {
+        console.log("IG yt-dlp fallback gagal");
+      }
+
+      return res.status(500).json({
+        ok: false,
+        error: "Gagal ambil video Instagram"
+      });
+    }
+
+    return res.status(400).json({
+      ok: false,
+      error: "Platform belum didukung"
     });
   } catch (err) {
     console.error("DOWNLOAD ERROR:", err);
-
-    if (finalPath && fs.existsSync(finalPath)) {
-      fs.unlink(finalPath, () => {});
-    }
 
     return res.status(500).json({
       ok: false,
