@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir -U yt-dlp
+RUN pip3 install --no-cache-dir -U yt-dlp --break-system-packages
 
 WORKDIR /app
 
