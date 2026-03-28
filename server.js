@@ -18,11 +18,14 @@ const PORT = process.env.PORT || 3000;
 function isAllowedUrl(url) {
   try {
     const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, "");
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+
     return [
       "tiktok.com",
+      "vm.tiktok.com",
+      "vt.tiktok.com",
       "instagram.com"
-    ].some(domain => host === domain || host.endsWith(`.${domain}`));
+    ].some((domain) => host === domain || host.endsWith(`.${domain}`));
   } catch {
     return false;
   }
@@ -43,10 +46,14 @@ function ensureIgCookies() {
 
 async function runYtDlp(args) {
   const { stdout, stderr } = await execFileAsync("yt-dlp", args, {
-    maxBuffer: 50 * 1024 * 1024,
+    maxBuffer: 50 * 1024 * 1024
   });
   return { stdout, stderr };
 }
+
+app.get("/", (_req, res) => {
+  res.send("Backend downloader hidup");
+});
 
 app.get("/health", (_req, res) => {
   res.status(200).send("ok");
@@ -59,7 +66,7 @@ app.post("/api/info", async (req, res) => {
     if (!url || !isAllowedUrl(url)) {
       return res.status(400).json({
         ok: false,
-        error: "URL tidak valid. Hanya TikTok dan Instagram dulu."
+        error: "URL tidak valid. Hanya TikTok dan Instagram yang didukung."
       });
     }
 
@@ -78,62 +85,77 @@ app.post("/api/info", async (req, res) => {
 
     return res.json({
       ok: true,
-      title: info.title,
-      thumbnail: info.thumbnail,
-      duration: info.duration,
-      webpage_url: info.webpage_url,
-      extractor: info.extractor
+      title: info.title || null,
+      thumbnail: info.thumbnail || null,
+      duration: info.duration || null,
+      webpage_url: info.webpage_url || url,
+      extractor: info.extractor || null
     });
   } catch (err) {
+    console.error("INFO ERROR:", err);
+
     return res.status(500).json({
       ok: false,
-      error: err.stderr || err.message || "Gagal ambil info"
+      error: err.stderr || err.message || "Gagal ambil info video"
     });
   }
 });
 
 app.post("/api/download", async (req, res) => {
+  let finalPath = null;
+
   try {
     const { url } = req.body;
 
     if (!url || !isAllowedUrl(url)) {
       return res.status(400).json({
         ok: false,
-        error: "URL tidak valid. Hanya TikTok dan Instagram dulu."
+        error: "URL tidak valid. Hanya TikTok dan Instagram yang didukung."
       });
     }
 
     const tempDir = os.tmpdir();
     const uniqueId = crypto.randomUUID();
     const outputTemplate = path.join(tempDir, `${uniqueId}.%(ext)s`);
-
     const cookiesFile = ensureIgCookies();
 
     const args = [
       ...(cookiesFile ? ["--cookies", cookiesFile] : []),
-      "-f", "bestvideo+bestaudio/best",
-      "--merge-output-format", "mp4",
-      "-o", outputTemplate,
+      "-f",
+      "bestvideo+bestaudio/best",
+      "--merge-output-format",
+      "mp4",
+      "-o",
+      outputTemplate,
       url
     ];
 
     await runYtDlp(args);
 
-    const matchedFiles = fs.readdirSync(tempDir).filter(name => name.startsWith(uniqueId));
-    if (!matchedFiles.length) {
+    const files = fs.readdirSync(tempDir).filter((name) => name.startsWith(uniqueId));
+
+    if (!files.length) {
       throw new Error("File hasil download tidak ditemukan");
     }
 
-    const finalName = matchedFiles[0];
-    const finalPath = path.join(tempDir, finalName);
+    const finalName = files[0];
+    finalPath = path.join(tempDir, finalName);
 
-    res.download(finalPath, finalName, () => {
-      fs.unlink(finalPath, () => {});
+    return res.download(finalPath, finalName, () => {
+      if (finalPath && fs.existsSync(finalPath)) {
+        fs.unlink(finalPath, () => {});
+      }
     });
   } catch (err) {
+    console.error("DOWNLOAD ERROR:", err);
+
+    if (finalPath && fs.existsSync(finalPath)) {
+      fs.unlink(finalPath, () => {});
+    }
+
     return res.status(500).json({
       ok: false,
-      error: err.stderr || err.message || "Gagal download"
+      error: err.stderr || err.message || "Gagal download video"
     });
   }
 });
